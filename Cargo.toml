@@ -1,6 +1,6 @@
 [package]
 name = "SaltPass"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["YanLien <YJQ980314@outlook.com>"]
 description = "A deterministic password generator based on cryptographic algorithms"
@@ -26,6 +26,12 @@ arboard = "3.4"
 zeroize = { version = "1.8", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["wincon", "handleapi"] }
 
 [profile.release]
 opt-level = 3

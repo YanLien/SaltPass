@@ -6,8 +6,8 @@ use crate::crypto::PasswordGenerator;
 use crate::models::{Feature, FeatureStore, Salt};
 use crate::storage::{Storage, StorageFormat};
 use arboard::Clipboard;
-use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
-use std::io;
+use dialoguer::{Input, Select, theme::ColorfulTheme};
+use std::io::{self, Read};
 
 /// Command-line interface handler
 pub struct Cli {
@@ -26,7 +26,7 @@ impl Cli {
             storage,
             store,
             salt: None,
-        })
+        })  
     }
 
     pub fn run(&mut self) -> io::Result<()> {
@@ -71,16 +71,132 @@ impl Cli {
     }
 
     fn enter_salt(&mut self) -> io::Result<()> {
-        let salt_input = Password::new()
-            .with_prompt("🔑 Enter your master salt (hidden)")
-            .interact()
-            .map_err(io::Error::other)?;
+        println!("🔑 Enter your master salt (input will show asterisks):");
+        let salt_input = self.read_password_with_asterisks()?;
+        
+        if salt_input.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Salt cannot be empty"));
+        }
 
         self.salt = Some(Salt::new(salt_input));
         println!("✅ Salt accepted (stored in memory only)");
         println!();
 
         Ok(())
+    }
+
+    /// Read password with asterisk feedback
+    fn read_password_with_asterisks(&self) -> io::Result<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            
+            let stdin = io::stdin();
+            let fd = stdin.as_raw_fd();
+            
+            let mut termios = unsafe { std::mem::zeroed() };
+            unsafe {
+                if libc::tcgetattr(fd, &mut termios) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                
+                let original_termios = termios;
+                termios.c_lflag &= !(libc::ECHO | libc::ICANON);
+                // Enable signal interrupt (ISIG) to allow Ctrl+C / Cmd+C to work
+                termios.c_lflag |= libc::ISIG;
+                
+                if libc::tcsetattr(fd, libc::TCSANOW, &termios) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                
+                let result = self.read_password_chars();
+                
+                // Restore terminal settings
+                libc::tcsetattr(fd, libc::TCSANOW, &original_termios);
+                result
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use winapi::um::wincon::{ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode, SetConsoleMode};
+            
+            let stdin = io::stdin();
+            let handle = stdin.as_raw_handle();
+            
+            let mut original_mode = 0u32;
+            unsafe {
+                if GetConsoleMode(handle, &mut original_mode) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                
+                let new_mode = original_mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+                if SetConsoleMode(handle, new_mode) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                
+                let result = self.read_password_chars();
+                
+                SetConsoleMode(handle, original_mode);
+                result
+            }
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            // Fallback for other platforms - use regular input (will show characters)
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            Ok(input.trim().to_string())
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn read_password_chars(&self) -> io::Result<String> {
+        use std::io::{self, Write};
+        
+        let mut password = String::new();
+        let stdin = io::stdin();
+        let mut stdout = io::stdout();
+        let mut handle = stdin.lock();
+        let mut buf = [0u8; 1];
+        
+        loop {
+            handle.read_exact(&mut buf)?;
+            let c = buf[0] as char;
+            
+            match c {
+                '\n' | '\r' => {
+                    println!();
+                    break;
+                }
+                '\x08' | '\x7f' => {
+                    // Backspace
+                    if !password.is_empty() {
+                        password.pop();
+                        // Move cursor back, clear character, move back again
+                        print!("\x08 \x08");
+                        stdout.flush()?;
+                    }
+                }
+                '\x03' => {
+                    // Ctrl+C
+                    println!();
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "Interrupted by user"));
+                }
+                c if c.is_ascii_graphic() => {
+                    password.push(c);
+                    print!("*");
+                    stdout.flush()?;
+                }
+                _ => {
+                    // Ignore other control characters
+                }
+            }
+        }
+        
+        Ok(password)
     }
 
     fn generate_password(&self) -> io::Result<()> {
