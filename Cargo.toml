@@ -2,9 +2,30 @@
 name = "SaltPass"
 version = "0.1.0"
 edition = "2024"
+authors = ["YanLien <YJQ980314@outlook.com>"]
+description = "A deterministic password generator based on cryptographic algorithms"
+license = "MIT"
+repository = "https://github.com/YanLien/SaltPass"
+homepage = "https://github.com/YanLien/SaltPass"
+documentation = "https://github.com/YanLien/SaltPass"
+readme = "README.md"
+keywords = ["password", "generator", "crypto", "security", "cli"]
+categories = ["command-line-utilities", "cryptography"]
+exclude = [".github/", "target/"]
 
 [dependencies]
 toml = "0.9.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+base64 = "0.22"
+dialoguer = "0.11"
+arboard = "3.4"
+zeroize = { version = "1.8", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
 
 [profile.release]
 opt-level = 3
