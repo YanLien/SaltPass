@@ -2,7 +2,7 @@
 //!
 //! This module provides an interactive CLI for managing features and generating passwords.
 
-use crate::crypto::PasswordGenerator;
+use crate::crypto::{PasswordGenerator, Algorithm};
 use crate::models::{Feature, FeatureStore, Salt};
 use crate::storage::{Storage, StorageFormat};
 use arboard::Clipboard;
@@ -71,7 +71,10 @@ impl Cli {
     }
 
     fn enter_salt(&mut self) -> io::Result<()> {
-        println!("🔑 Enter your master salt (input will show asterisks):");
+        print!("🔑 Enter your master salt (Tab: Show/Hide): ");
+        use std::io::Write;
+        io::stdout().flush()?;
+        
         let salt_input = self.read_password_with_asterisks()?;
         
         if salt_input.is_empty() {
@@ -157,6 +160,7 @@ impl Cli {
         use std::io::{self, Write};
         
         let mut password = String::new();
+        let mut visible = false; // Track visibility state
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut handle = stdin.lock();
@@ -167,16 +171,32 @@ impl Cli {
             let c = buf[0] as char;
             
             match c {
+                '\t' => {
+                    // Tab key - toggle visibility
+                    visible = !visible;
+                    // Clear current display and show new state
+                    for _ in 0..password.len() {
+                        print!("\x08 \x08"); // Backspace, space, backspace
+                    }
+                    // Redisplay in new mode
+                    if visible {
+                        print!("{}", password);
+                    } else {
+                        for _ in 0..password.len() {
+                            print!("*");
+                        }
+                    }
+                    stdout.flush()?;
+                }
                 '\n' | '\r' => {
                     println!();
                     break;
                 }
                 '\x08' | '\x7f' => {
-                    // Backspace
+                    // Backspace/Delete
                     if !password.is_empty() {
                         password.pop();
-                        // Move cursor back, clear character, move back again
-                        print!("\x08 \x08");
+                        print!("\x08 \x08"); // Backspace, space, backspace
                         stdout.flush()?;
                     }
                 }
@@ -187,7 +207,11 @@ impl Cli {
                 }
                 c if c.is_ascii_graphic() => {
                     password.push(c);
-                    print!("*");
+                    if visible {
+                        print!("{}", c);
+                    } else {
+                        print!("*");
+                    }
                     stdout.flush()?;
                 }
                 _ => {
@@ -210,10 +234,11 @@ impl Cli {
             .list_features()
             .iter()
             .map(|f| {
+                let algo = format!("[{}]", f.algorithm.name());
                 if let Some(hint) = &f.hint {
-                    format!("{} ({}) - {}", f.name, f.feature, hint)
+                    format!("{} {} ({}) - {}", algo, f.name, f.feature, hint)
                 } else {
-                    format!("{} ({})", f.name, f.feature)
+                    format!("{} {} ({})", algo, f.name, f.feature)
                 }
             })
             .collect();
@@ -236,11 +261,17 @@ impl Cli {
 
         let length = length_input.parse::<usize>().unwrap_or(16).clamp(12, 64);
 
-        let password = PasswordGenerator::generate(salt.value(), &feature.feature, length);
+        let password = PasswordGenerator::generate_with_algo(
+            salt.value(),
+            &feature.feature,
+            length,
+            feature.algorithm,
+        );
 
         println!("\n🎯 Generated Password:");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("Feature: {} ({})", feature.name, feature.feature);
+        println!("Algorithm: {}", feature.algorithm.name());
         println!("Password: {}", password);
         println!("Length: {}", password.len());
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -265,6 +296,29 @@ impl Cli {
             .interact_text()
             .map_err(io::Error::other)?;
 
+        // Select algorithm
+        let algo_items: Vec<String> = Algorithm::all()
+            .iter()
+            .map(|a| format!("{} - {}", a.name(), {
+                match a {
+                    Algorithm::HmacSha256 => "Fast (Recommended for password generation)",
+                    Algorithm::Argon2i => "Memory-hard (Slower, more secure)",
+                    Algorithm::Argon2id => "Hybrid (Balanced)",
+                    Algorithm::Pbkdf2 => "Standard (Compatible)",
+                    Algorithm::Scrypt => "Memory-hard (Slower)",
+                }
+            }))
+            .collect();
+
+        let algo_selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select password generation algorithm")
+            .items(&algo_items)
+            .default(0)
+            .interact()
+            .map_err(io::Error::other)?;
+
+        let algorithm = Algorithm::all()[algo_selection];
+
         let hint: String = Input::new()
             .with_prompt("Hint (optional, press Enter to skip)")
             .allow_empty(true)
@@ -273,7 +327,7 @@ impl Cli {
 
         let hint_option = if hint.is_empty() { None } else { Some(hint) };
 
-        let new_feature = Feature::new(name.clone(), feature, hint_option);
+        let new_feature = Feature::new(name.clone(), feature, algorithm, hint_option);
         self.store.add_feature(new_feature);
         self.storage.save(&self.store)?;
 
@@ -295,6 +349,7 @@ impl Cli {
 
         for (idx, feature) in features.iter().enumerate() {
             println!("{}. {} ({})", idx + 1, feature.name, feature.feature);
+            println!("   Algorithm: {}", feature.algorithm.name());
             if let Some(hint) = &feature.hint {
                 println!("   Hint: {}", hint);
             }

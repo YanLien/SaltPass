@@ -8,6 +8,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::crypto::Algorithm;
 
 /// Master salt that is automatically zeroed when dropped
 ///
@@ -36,15 +37,18 @@ impl Salt {
 pub struct Feature {
     pub name: String,
     pub feature: String,
+    #[serde(default)]
+    pub algorithm: Algorithm,
     pub created: DateTime<Utc>,
     pub hint: Option<String>,
 }
 
 impl Feature {
-    pub fn new(name: String, feature: String, hint: Option<String>) -> Self {
+    pub fn new(name: String, feature: String, algorithm: Algorithm, hint: Option<String>) -> Self {
         Self {
             name,
             feature,
+            algorithm,
             created: Utc::now(),
             hint,
         }

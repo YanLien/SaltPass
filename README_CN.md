@@ -6,11 +6,12 @@
 
 - 🔑 **确定性生成**：相同的盐值 + 特征 = 相同的密码，始终如一
 - 🧠 **仅内存存储**：主盐值永不写入磁盘
-- 🔒 **强加密**：采用 HMAC-SHA256 算法
+- 🔒 **多种算法**：支持 HMAC-SHA256、Argon2i、Argon2id、Pbkdf2、Scrypt
 - 📋 **自动剪贴板**：生成的密码自动复制到剪贴板
 - 💾 **本地存储**：特征存储在 `~/.saltpass/features.toml`
 - 🎨 **精美 CLI**：交互式彩色命令行界面
 - 🧹 **内存安全**：使用 `zeroize` 在退出时自动清零盐值
+- ⚙️ **按特征选择算法**：为每个特征选择不同的密码生成算法
 
 ## 🚀 快速开始
 
@@ -74,7 +75,15 @@ $ ./target/release/SaltPass
 ```
 特征名称：GitHub
 特征标识符：github.com
-提示：个人账户
+
+? 选择密码生成算法
+❯ HMAC-SHA256 - 快速（推荐用于密码生成）
+  Argon2i - 内存密集（较慢，更安全）
+  Argon2id - 混合模式（平衡）
+  PBKDF2 - 标准（兼容性好）
+  Scrypt - 内存密集（较慢）
+
+提示（可选，按 Enter 跳过）：个人账户
 ✅ 特征 'GitHub' 添加成功！
 ```
 
@@ -82,13 +91,14 @@ $ ./target/release/SaltPass
 
 ```
 ? 选择要生成密码的特征
-❯ GitHub (github.com) - 个人账户
+❯ [HMAC-SHA256] GitHub (github.com) - 个人账户
 
 密码长度（12-64）：16
 
 🎯 生成的密码：
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 特征：GitHub (github.com)
+算法：HMAC-SHA256
 密码：Xy3!bN7kLmP9QrSt
 长度：16
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -109,17 +119,29 @@ struct Salt {
 struct Feature {
     name: String,           // 显示名称（如 "GitHub"）
     feature: String,        // 标识符（如 "github.com"）
+    algorithm: Algorithm,   // 密码生成算法
     created: DateTime<Utc>, // 创建时间戳
     hint: Option<String>    // 可选提醒
+}
+
+// Algorithm - 可用的密码生成算法
+enum Algorithm {
+    HmacSha256,   // 快速（默认，推荐）
+    Argon2i,      // 内存密集（较慢）
+    Argon2id,     // 混合模式
+    Pbkdf2,       // 标准 PBKDF2-HMAC-SHA256
+    Scrypt,       // 内存密集（较慢）
 }
 ```
 
 ### 密码生成算法
 
 ```
-输入：盐值 + 特征
+输入：盐值 + 特征 + 算法
         ↓
-    HMAC-SHA256
+    密钥派生函数（KDF）
+        ↓
+    (HMAC-SHA256 | Argon2i | Argon2id | PBKDF2 | Scrypt)
         ↓
     Base64 编码
         ↓
@@ -127,6 +149,16 @@ struct Feature {
         ↓
 输出：强密码
 ```
+
+### 支持的算法
+
+| 算法 | 类型 | 速度 | 安全性 | 适用场景 |
+|-----------|------|-------|----------|----------|
+| **HMAC-SHA256** | 快速 | ⚡⚡⚡ | 🔒🔒🔒 | 默认，推荐用于密码生成 |
+| **Argon2i** | 内存密集 | ⚡ | 🔒🔒🔒🔒 | 最高安全性，较慢 |
+| **Argon2id** | 混合 | ⚡⚡ | 🔒🔒🔒🔒 | 平衡安全性和性能 |
+| **PBKDF2** | 标准 | ⚡⚡ | 🔒🔒🔒 | 广泛兼容性 |
+| **Scrypt** | 内存密集 | ⚡ | 🔒🔒🔒🔒 | 抗 ASIC，较慢 |
 
 ## 🛠️ 技术细节
 
@@ -137,6 +169,9 @@ struct Feature {
 - **toml**：TOML 存储格式（默认）
 - **sha2**：SHA-256 哈希
 - **hmac**：HMAC 实现
+- **argon2**：Argon2i/Argon2id 密码哈希
+- **pbkdf2**：PBKDF2-HMAC-SHA256
+- **scrypt**：Scrypt 密码哈希
 - **base64**：Base64 编码
 - **dialoguer**：交互式 CLI
 - **arboard**：剪贴板集成
@@ -279,3 +314,7 @@ MIT License - 详见 LICENSE 文件
 - 询问可选提示（本地存储）
 - 创建验证哈希（以确认正确的盐值输入）
 - **绝不存储实际的盐值**
+
+
++ 支持随时退出
++ 确定性生成算法

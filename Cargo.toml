@@ -23,6 +23,9 @@ hex = "0.4"
 base64 = "0.22"
 dialoguer = "0.11"
 arboard = "3.4"
+argon2 = "0.5"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+scrypt = "0.11"
 zeroize = { version = "1.8", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0"

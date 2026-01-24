@@ -8,11 +8,12 @@
 
 - 🔑 **Deterministic Generation**: Same salt + feature = same password, always
 - 🧠 **Memory Only**: Master salt never touches disk
-- 🔒 **Strong Encryption**: HMAC-SHA256 algorithm
+- 🔒 **Multiple Algorithms**: HMAC-SHA256, Argon2i, Argon2id, Pbkdf2, Scrypt
 - 📋 **Auto Clipboard**: Generated passwords auto-copy to clipboard
 - 💾 **Local Storage**: Features stored in `~/.saltpass/features.toml`
 - 🎨 **Beautiful CLI**: Interactive colorful command-line interface
 - 🧹 **Memory Safety**: Auto-zero salt on exit using `zeroize`
+- ⚙️ **Per-Feature Algorithm**: Choose different algorithms for each feature
 
 ## 🚀 Quick Start
 
@@ -76,7 +77,15 @@ $ ./target/release/SaltPass
 ```
 Feature name: GitHub
 Feature identifier: github.com
-Hint: Personal account
+
+? Select password generation algorithm
+❯ HMAC-SHA256 - Fast (Recommended for password generation)
+  Argon2i - Memory-hard (Slower, more secure)
+  Argon2id - Hybrid (Balanced)
+  PBKDF2 - Standard (Compatible)
+  Scrypt - Memory-hard (Slower)
+
+Hint (optional, press Enter to skip): Personal account
 ✅ Feature 'GitHub' added successfully!
 ```
 
@@ -84,13 +93,14 @@ Hint: Personal account
 
 ```
 ? Select a feature to generate password
-❯ GitHub (github.com) - Personal account
+❯ [HMAC-SHA256] GitHub (github.com) - Personal account
 
 Password length (12-64): 16
 
 🎯 Generated Password:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Feature: GitHub (github.com)
+Algorithm: HMAC-SHA256
 Password: Xy3!bN7kLmP9QrSt
 Length: 16
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -111,17 +121,29 @@ struct Salt {
 struct Feature {
     name: String,           // Display name (e.g., "GitHub")
     feature: String,        // Identifier (e.g., "github.com")
+    algorithm: Algorithm,   // Password generation algorithm
     created: DateTime<Utc>, // Creation timestamp
     hint: Option<String>    // Optional reminder
+}
+
+// Algorithm - available password generation algorithms
+enum Algorithm {
+    HmacSha256,   // Fast (default, recommended)
+    Argon2i,      // Memory-hard (slower)
+    Argon2id,     // Hybrid mode
+    Pbkdf2,       // Standard PBKDF2-HMAC-SHA256
+    Scrypt,       // Memory-hard (slower)
 }
 ```
 
 ### Password Generation Algorithm
 
 ```
-Input: Salt + Feature
+Input: Salt + Feature + Algorithm
         ↓
-    HMAC-SHA256
+    Key Derivation Function (KDF)
+        ↓
+    (HMAC-SHA256 | Argon2i | Argon2id | PBKDF2 | Scrypt)
         ↓
     Base64 Encode
         ↓
@@ -129,6 +151,16 @@ Format & Strengthen (ensure uppercase, digit, special char)
         ↓
 Output: Strong Password
 ```
+
+### Supported Algorithms
+
+| Algorithm | Type | Speed | Security | Use Case |
+|-----------|------|-------|----------|----------|
+| **HMAC-SHA256** | Fast | ⚡⚡⚡ | 🔒🔒🔒 | Default, recommended for password generation |
+| **Argon2i** | Memory-hard | ⚡ | 🔒🔒🔒🔒 | Maximum security, slower |
+| **Argon2id** | Hybrid | ⚡⚡ | 🔒🔒🔒🔒 | Balanced security/performance |
+| **PBKDF2** | Standard | ⚡⚡ | 🔒🔒🔒 | Wide compatibility |
+| **Scrypt** | Memory-hard | ⚡ | 🔒🔒🔒🔒 | ASIC-resistant, slower |
 
 ## 🛠️ Technical Details
 
@@ -139,6 +171,9 @@ Output: Strong Password
 - **toml**: TOML storage format (default)
 - **sha2**: SHA-256 hashing
 - **hmac**: HMAC implementation
+- **argon2**: Argon2i/Argon2id password hashing
+- **pbkdf2**: PBKDF2-HMAC-SHA256
+- **scrypt**: Scrypt password hashing
 - **base64**: Base64 encoding
 - **dialoguer**: Interactive CLI
 - **arboard**: Clipboard integration

@@ -25,8 +25,8 @@ mod models;
 mod storage;
 
 use cli::Cli;
-use std::process;
 use storage::StorageFormat;
+use std::process;
 
 fn main() {
     let format = StorageFormat::Toml;
