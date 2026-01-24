@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-01-24
+
+### Changed
+- **Windows API migration**: Replaced deprecated `winapi` crate with modern `windows-sys 0.59`
+- **Updated console API calls**: Migrated Windows console mode API to use `windows-sys` interface
+
+### Fixed
+- Fixed test case in `storage.rs` to include required `algorithm` parameter
+
 ## [0.1.1] - 2026-01-24
 
 ### Added
@@ -45,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No disk storage of master salt
 - Offline-first design (no network required)
 
-[Unreleased]: https://github.com/YanLien/SaltPass/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/YanLien/SaltPass/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/YanLien/SaltPass/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/YanLien/SaltPass/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/YanLien/SaltPass/releases/tag/v0.1.0

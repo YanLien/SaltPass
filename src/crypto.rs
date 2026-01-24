@@ -4,8 +4,8 @@
 //! Given the same salt and feature identifier, it will always produce the same password.
 
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -71,6 +71,7 @@ impl PasswordGenerator {
     /// let password = PasswordGenerator::generate_with_algo("my-secret-salt", "github.com", 16, Algorithm::HmacSha256);
     /// assert_eq!(password.len(), 16);
     /// ```
+    #[allow(dead_code)]
     pub fn generate(salt: &str, feature: &str, length: usize) -> String {
         Self::generate_with_algo(salt, feature, length, Algorithm::HmacSha256)
     }
@@ -92,47 +93,40 @@ impl PasswordGenerator {
     }
 
     fn derive_hmac_sha256(salt: &str, feature: &str) -> [u8; 32] {
-        let mut mac = HmacSha256::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
+        let mut mac =
+            HmacSha256::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
         mac.update(feature.as_bytes());
         let result = mac.finalize();
         *result.into_bytes().as_ref()
     }
 
     fn derive_argon2(salt: &str, feature: &str, alg: argon2::Algorithm) -> [u8; 32] {
-        use argon2::{Argon2, Version, Params};
+        use argon2::{Argon2, Params, Version};
         let params = Params::new(65536, 1, 1, None).unwrap();
         let argon2 = Argon2::new(alg, Version::V0x13, params);
         let mut output = [0u8; 32];
-        argon2.hash_password_into(feature.as_bytes(), salt.as_bytes(), &mut output).unwrap();
+        argon2
+            .hash_password_into(feature.as_bytes(), salt.as_bytes(), &mut output)
+            .unwrap();
         output
     }
 
     fn derive_pbkdf2(salt: &str, feature: &str) -> [u8; 32] {
-        use sha2::Sha256;
         use pbkdf2::pbkdf2_hmac;
+        use sha2::Sha256;
 
         let mut output = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(
-            feature.as_bytes(),
-            salt.as_bytes(),
-            10000,
-            &mut output
-        );
+        pbkdf2_hmac::<Sha256>(feature.as_bytes(), salt.as_bytes(), 10000, &mut output);
         output
     }
 
     fn derive_scrypt(salt: &str, feature: &str) -> [u8; 32] {
-        use scrypt::{scrypt, Params};
+        use scrypt::{Params, scrypt};
 
         // Params::new(log_n, r, p, output_length)
         let params = Params::new(15, 8, 1, 32).unwrap();
         let mut output = [0u8; 32];
-        scrypt(
-            feature.as_bytes(),
-            salt.as_bytes(),
-            &params,
-            &mut output
-        ).expect("scrypt failed");
+        scrypt(feature.as_bytes(), salt.as_bytes(), &params, &mut output).expect("scrypt failed");
         output
     }
 

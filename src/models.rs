@@ -5,10 +5,10 @@
 //! - `Feature`: Feature identifiers for password generation
 //! - `FeatureStore`: Collection of features
 
+use crate::crypto::Algorithm;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use crate::crypto::Algorithm;
 
 /// Master salt that is automatically zeroed when dropped
 ///

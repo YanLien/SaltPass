@@ -115,6 +115,7 @@ mod tests {
         store.add_feature(Feature::new(
             "GitHub".to_string(),
             "github.com".to_string(),
+            crate::crypto::Algorithm::HmacSha256,
             Some("Main account".to_string()),
         ));
 
