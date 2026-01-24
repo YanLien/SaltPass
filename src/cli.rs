@@ -126,13 +126,14 @@ impl Cli {
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::HANDLE;
             use windows_sys::Win32::System::Console::{
                 ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode,
                 SetConsoleMode,
             };
 
             let stdin = io::stdin();
-            let handle = stdin.as_raw_handle() as isize;
+            let handle: HANDLE = stdin.as_raw_handle() as *mut _;
 
             let mut original_mode = 0u32;
             unsafe {
