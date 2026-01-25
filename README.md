@@ -14,6 +14,9 @@
 - 🎨 **Beautiful CLI**: Interactive colorful command-line interface
 - 🧹 **Memory Safety**: Auto-zero salt on exit using `zeroize`
 - ⚙️ **Per-Feature Algorithm**: Choose different algorithms for each feature
+- 🔐 **File Encryption** (Experimental): AES-256-GCM encryption for stored features
+- 📁 **Multiple Formats**: Support for TOML and JSON storage formats
+- ⌨️ **Enhanced Input**: Arrow key navigation, delete support, show/hide toggle
 
 ## 🚀 Quick Start
 
@@ -186,6 +189,22 @@ Output: Strong Password
 - **macOS/Linux**: `~/.saltpass/features.toml`
 - **Windows**: `C:\Users\Username\.saltpass\features.toml`
 
+### Encryption (Experimental)
+
+⚠️ **WARNING**: Encryption is experimental. If you forget your master salt, your data cannot be recovered.
+
+**Encrypted Storage** (`*.enc` files):
+- Features encrypted with AES-256-GCM
+- Uses your master salt as the encryption key
+- Same password = same decryption key
+- Provides at-rest encryption for feature data
+
+**Plain Text Storage** (recommended):
+- Features stored as readable TOML/JSON
+- Easier to backup and view
+- Can be edited manually if needed
+- No risk of data loss from forgotten password
+
 ### Security Features
 
 1. **Memory Protection**: Salt uses `zeroize` crate with `ZeroizeOnDrop` trait
@@ -215,41 +234,19 @@ New:      github.com.v3
 
 Each version generates a completely different password.
 
-## 🗺️ Future Roadmap
+## 🗺️ Roadmap
 
-### Password Management
-- [ ] 🔄 **Password Versioning System**: Built-in version management for rotating passwords (e.g., `github.com.v2`)
-- [ ] ⚙️ **Custom Password Policies**: Per-feature password strength configuration (length, character sets)
-- [ ] 📊 **Usage Statistics**: Track last used, generation count, password age alerts
-- [ ] 🔔 **Rotation Reminders**: Smart notifications for old passwords (90+ days)
-- [ ] 📦 **Export/Import**: Backup and restore feature configurations (not passwords)
+### Recent Enhancements (v0.1.2)
+- [x] 🔐 **Feature File Encryption** (Experimental): AES-256-GCM encryption for stored features
+- [x] 📁 **Multiple Storage Formats**: TOML and JSON support
+- [x] ⌨️ **Enhanced Password Input**: Arrow keys, delete key, visual cursor feedback
+- [x] 🌐 **Internationalization**: Chinese (Simplified) support
 
-### Multi-Profile Support
-- [ ] 🔐 **Multiple Salt Profiles**: Separate work/personal/family salt configurations
-- [ ] 🏷️ **Feature Tagging**: Organize features by category (social, banking, work, etc.)
-- [ ] 🔍 **Advanced Search**: Quick filter by tags, age, or usage frequency
-
-### Security Enhancements
+### Planned Enhancements
+- [ ] 📦 **Export/Import**: Backup and restore feature configurations
+- [ ] 🔑 **Device-based Encryption**: Use device UUID as encryption key
 - [ ] 🗑️ **Auto-clear Clipboard**: Configurable timeout to clear copied passwords
-- [ ] 🔒 **Optional Feature Encryption**: Encrypt stored feature names with master password
-- [ ] 🔐 **Two-Factor Salt**: Combine master salt with device-specific salt
-- [ ] 🛡️ **Breach Detection**: Check feature domains against known breach databases (offline)
-
-### User Experience
-- [ ] 🎨 **GUI Version**: Desktop app using egui/iced framework
-- [ ] 🌐 **Browser Extension**: One-click password generation and auto-fill
-- [ ] 📱 **Mobile Apps**: iOS/Android with cross-device feature sync
-- [ ] ⌨️ **Quick Access Mode**: Hotkey-triggered floating window
-
-### Cross-Platform
-- [ ] ☁️ **Feature File Sync**: iCloud/Dropbox/Git sync for feature configurations
-- [ ] 🔄 **Conflict Resolution**: Smart merge for multi-device feature updates
-- [ ] 📲 **QR Code Transfer**: Quick feature transfer between devices
-
-### Developer Features
-- [ ] 🔌 **Plugin System**: Custom password generation algorithms
 - [ ] 🛠️ **CLI Improvements**: Scripting support, JSON output, batch operations
-- [ ] 📚 **API Library**: Use SaltPass as a Rust library in other projects
 
 ## Non-Goals
 

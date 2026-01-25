@@ -3,6 +3,10 @@
 //! This module provides deterministic password generation using multiple algorithms.
 //! Given the same salt and feature identifier, it will always produce the same password.
 
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -93,8 +97,8 @@ impl PasswordGenerator {
     }
 
     fn derive_hmac_sha256(salt: &str, feature: &str) -> [u8; 32] {
-        let mut mac =
-            HmacSha256::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
+        let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(salt.as_bytes())
+            .expect("HMAC can take key of any size");
         mac.update(feature.as_bytes());
         let result = mac.finalize();
         *result.into_bytes().as_ref()
@@ -102,7 +106,7 @@ impl PasswordGenerator {
 
     fn derive_argon2(salt: &str, feature: &str, alg: argon2::Algorithm) -> [u8; 32] {
         use argon2::{Argon2, Params, Version};
-        let params = Params::new(65536, 1, 1, None).unwrap();
+        let params = Params::new(65536, 2, 2, None).unwrap();
         let argon2 = Argon2::new(alg, Version::V0x13, params);
         let mut output = [0u8; 32];
         argon2
@@ -197,6 +201,81 @@ impl PasswordGenerator {
             '=' => specials[(idx + 2) % specials.len()],
             _ => '!',
         }
+    }
+}
+
+/// AES-256-GCM encryption for feature storage
+///
+/// Provides authenticated encryption for secure data persistence.
+pub struct StorageCipher;
+
+impl StorageCipher {
+    const NONCE_SIZE: usize = 12;
+    const KEY_SIZE: usize = 32;
+
+    /// Derive a 256-bit encryption key from a password using PBKDF2
+    fn derive_key(password: &str) -> [u8; Self::KEY_SIZE] {
+        use pbkdf2::pbkdf2_hmac;
+
+        let salt = b"SaltPass-Storage-Key"; // Fixed salt for key derivation
+        let mut key = [0u8; Self::KEY_SIZE];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut key);
+        key
+    }
+
+    /// Encrypt data using AES-256-GCM
+    ///
+    /// # Arguments
+    ///
+    /// * `password` - Encryption password
+    /// * `plaintext` - Data to encrypt
+    ///
+    /// # Returns
+    ///
+    /// Base64-encoded ciphertext with nonce prepended (nonce || ciphertext || tag)
+    pub fn encrypt(password: &str, plaintext: &[u8]) -> Result<String, String> {
+        let key = Self::derive_key(password);
+        let cipher = Aes256Gcm::new(&key.into());
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+
+        cipher
+            .encrypt(&nonce, plaintext)
+            .map(|ciphertext| {
+                // Format: nonce || ciphertext (includes auth tag)
+                let mut result = nonce.to_vec();
+                result.extend_from_slice(&ciphertext);
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, result)
+            })
+            .map_err(|e| format!("Encryption failed: {}", e))
+    }
+
+    /// Decrypt data using AES-256-GCM
+    ///
+    /// # Arguments
+    ///
+    /// * `password` - Decryption password
+    /// * `encoded` - Base64-encoded ciphertext (nonce || ciphertext || tag)
+    ///
+    /// # Returns
+    ///
+    /// Decrypted plaintext
+    pub fn decrypt(password: &str, encoded: &str) -> Result<Vec<u8>, String> {
+        let key = Self::derive_key(password);
+        let cipher = Aes256Gcm::new(&key.into());
+
+        let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+        if data.len() < Self::NONCE_SIZE {
+            return Err("Invalid ciphertext: too short".to_string());
+        }
+
+        let (nonce_bytes, ciphertext) = data.split_at(Self::NONCE_SIZE);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("Decryption failed: {}", e))
     }
 }
 

@@ -1,7 +1,9 @@
 //! Storage layer for feature persistence
 //!
-//! This module handles loading and saving features to disk in JSON or TOML format.
+//! This module handles loading and saving features to disk in JSON or TOML format,
+//! with optional AES-256-GCM encryption.
 
+use crate::crypto::StorageCipher;
 use crate::models::FeatureStore;
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -39,14 +41,31 @@ impl StorageFormat {
 pub struct Storage {
     file_path: PathBuf,
     format: StorageFormat,
+    encrypted: bool,
+    encryption_password: Option<String>,
 }
 
 impl Storage {
-    pub fn new(file_path: PathBuf, format: StorageFormat) -> Self {
-        Self { file_path, format }
+    pub fn new(file_path: PathBuf, format: StorageFormat, encrypted: bool) -> Self {
+        Self {
+            file_path,
+            format,
+            encrypted,
+            encryption_password: None,
+        }
     }
 
-    pub fn default_path(format: StorageFormat) -> io::Result<PathBuf> {
+    /// Set the encryption password for encrypted storage
+    pub fn set_password(&mut self, password: String) {
+        self.encryption_password = Some(password);
+    }
+
+    #[allow(dead_code)]
+    pub fn is_encrypted(&self) -> bool {
+        self.encrypted
+    }
+
+    pub fn default_path(format: StorageFormat, encrypted: bool) -> io::Result<PathBuf> {
         let home = dirs::home_dir()
             .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
 
@@ -55,7 +74,12 @@ impl Storage {
             fs::create_dir_all(&config_dir)?;
         }
 
-        Ok(config_dir.join(format!("features.{}", format.extension())))
+        let ext = if encrypted {
+            format!("{}.enc", format.extension())
+        } else {
+            format.extension().to_string()
+        };
+        Ok(config_dir.join(format!("features.{}", ext)))
     }
 
     pub fn load(&self) -> io::Result<FeatureStore> {
@@ -65,11 +89,27 @@ impl Storage {
 
         let content = fs::read_to_string(&self.file_path)?;
 
-        match self.format {
-            StorageFormat::Json => serde_json::from_str(&content)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e)),
-            StorageFormat::Toml => {
-                toml::from_str(&content).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+        if self.encrypted {
+            let password = self.encryption_password.as_ref().ok_or_else(|| {
+                io::Error::new(ErrorKind::NotFound, "Encryption password not set")
+            })?;
+            let decrypted = StorageCipher::decrypt(password, &content)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+            let decrypted_string = String::from_utf8(decrypted)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+            match self.format {
+                StorageFormat::Json => serde_json::from_str(&decrypted_string)
+                    .map_err(|e| io::Error::new(ErrorKind::InvalidData, e)),
+                StorageFormat::Toml => toml::from_str(&decrypted_string)
+                    .map_err(|e| io::Error::new(ErrorKind::InvalidData, e)),
+            }
+        } else {
+            match self.format {
+                StorageFormat::Json => serde_json::from_str(&content)
+                    .map_err(|e| io::Error::new(ErrorKind::InvalidData, e)),
+                StorageFormat::Toml => {
+                    toml::from_str(&content).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+                }
             }
         }
     }
@@ -79,11 +119,22 @@ impl Storage {
             fs::create_dir_all(parent)?;
         }
 
-        let content = match self.format {
-            StorageFormat::Json => serde_json::to_string_pretty(store)
+        let data = match self.format {
+            StorageFormat::Json => serde_json::to_vec_pretty(store)
                 .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?,
             StorageFormat::Toml => toml::to_string_pretty(store)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?,
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?
+                .into_bytes(),
+        };
+
+        let content = if self.encrypted {
+            let password = self.encryption_password.as_ref().ok_or_else(|| {
+                io::Error::new(ErrorKind::NotFound, "Encryption password not set")
+            })?;
+            StorageCipher::encrypt(password, &data)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?
+        } else {
+            String::from_utf8(data).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?
         };
 
         fs::write(&self.file_path, content)?;
@@ -92,6 +143,49 @@ impl Storage {
 
     pub fn file_path(&self) -> &Path {
         &self.file_path
+    }
+
+    /// Export decrypted content as TOML string for viewing
+    pub fn export_decrypted(&self) -> io::Result<String> {
+        if !self.file_path.exists() {
+            return Err(io::Error::new(
+                ErrorKind::NotFound,
+                "Storage file not found",
+            ));
+        }
+
+        let content = fs::read_to_string(&self.file_path)?;
+
+        if self.encrypted {
+            let password = self.encryption_password.as_ref().ok_or_else(|| {
+                io::Error::new(ErrorKind::NotFound, "Encryption password not set")
+            })?;
+            let decrypted = StorageCipher::decrypt(password, &content)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+            let decrypted_string = String::from_utf8(decrypted)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+            // Always show as TOML for consistency
+            match self.format {
+                StorageFormat::Json => {
+                    let store: FeatureStore = serde_json::from_str(&decrypted_string)
+                        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                    toml::to_string_pretty(&store)
+                        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+                }
+                StorageFormat::Toml => Ok(decrypted_string),
+            }
+        } else {
+            match self.format {
+                StorageFormat::Json => {
+                    // Parse JSON and convert to TOML for viewing
+                    let store: FeatureStore = serde_json::from_str(&content)
+                        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+                    toml::to_string_pretty(&store)
+                        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
+                }
+                StorageFormat::Toml => Ok(content),
+            }
+        }
     }
 }
 
@@ -110,7 +204,7 @@ mod tests {
             fs::remove_file(&test_file).unwrap();
         }
 
-        let storage = Storage::new(test_file.clone(), StorageFormat::Json);
+        let storage = Storage::new(test_file.clone(), StorageFormat::Json, false);
         let mut store = FeatureStore::new();
         store.add_feature(Feature::new(
             "GitHub".to_string(),

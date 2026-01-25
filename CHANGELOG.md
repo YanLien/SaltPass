@@ -5,7 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-01-25
+
+### Added
+- **🔐 Feature file encryption** (Experimental): AES-256-GCM encryption for stored features
+- **📁 Multiple storage formats**: Support for both TOML and JSON storage formats
+- **⌨️ Enhanced password input**:
+  - Arrow key navigation (left/right)
+  - Delete key support
+  - Tab toggle to show/hide password
+  - Visual cursor feedback
+  - UTF-8 character aware cursor positioning
+- **View decrypted content**: Menu option to view decrypted storage content
+
+### Changed
+- **Improved error display**: Errors now clear line and display from line start using ANSI escape codes
+- **Default to plain text storage**: Encryption is now marked as experimental with warnings
+- **Workflow**: Ask for encryption and format preferences before loading storage
+
+### Fixed
+- Fixed encrypted file loading to defer until password is entered
+- Fixed backspace key behavior to correctly delete characters with proper screen redrawing
+- Fixed newline handling in raw terminal mode for proper line breaks after password input
+
 ## [0.1.2] - 2026-01-24
+
+### Added
+- **🌐 Internationalization**: Chinese (Simplified) language support
 
 ### Changed
 - **Windows API migration**: Replaced deprecated `winapi` crate with modern `windows-sys 0.59`
@@ -13,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed test case in `storage.rs` to include required `algorithm` parameter
+- Fixed Windows console handle type conversion for windows-sys
 
 ## [0.1.1] - 2026-01-24
 
@@ -54,7 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No disk storage of master salt
 - Offline-first design (no network required)
 
-[Unreleased]: https://github.com/YanLien/SaltPass/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/YanLien/SaltPass/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/YanLien/SaltPass/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/YanLien/SaltPass/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/YanLien/SaltPass/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/YanLien/SaltPass/releases/tag/v0.1.0

@@ -17,24 +17,102 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub fn new(format: StorageFormat) -> io::Result<Self> {
-        let file_path = Storage::default_path(format)?;
-        let storage = Storage::new(file_path, format);
+    pub fn new() -> io::Result<Self> {
+        // Ask for preferences first
+        let should_encrypt = Self::ask_encryption_preference()?;
+        let format = Self::ask_format_preference()?;
+
+        // Get file path
+        let file_path = Storage::default_path(format, should_encrypt)?;
+        let mut storage = Storage::new(file_path, format, should_encrypt);
+
+        // Ask for salt
+        let salt = Self::ask_salt_before_init()?;
+
+        // Set password if encrypted and load store
+        if should_encrypt {
+            storage.set_password(salt.clone());
+        }
+
         let store = storage.load()?;
 
         Ok(Self {
             storage,
             store,
-            salt: None,
+            salt: Some(Salt::new(salt)),
         })
+    }
+
+    /// Ask for salt before/during initialization
+    fn ask_salt_before_init() -> io::Result<String> {
+        use std::io::Write;
+        print!("🔑 Enter your master salt (Tab: Show/Hide): ");
+        io::stdout().flush()?;
+
+        // Create a temporary Cli instance just to use the password reading method
+        let temp_cli = Cli {
+            storage: Storage::new(
+                Storage::default_path(StorageFormat::Toml, false)?,
+                StorageFormat::Toml,
+                false,
+            ),
+            store: FeatureStore::new(),
+            salt: None,
+        };
+
+        let salt = temp_cli.read_password_with_asterisks()?;
+
+        if salt.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Salt cannot be empty",
+            ));
+        }
+
+        Ok(salt)
+    }
+
+    fn ask_format_preference() -> io::Result<StorageFormat> {
+        println!("📁 Choose file format:");
+        let choices = vec!["TOML (Recommended)", "JSON"];
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Format")
+            .items(&choices)
+            .default(0)
+            .interact()
+            .map_err(io::Error::other)?;
+
+        Ok(if selection == 0 {
+            StorageFormat::Toml
+        } else {
+            StorageFormat::Json
+        })
+    }
+
+    fn ask_encryption_preference() -> io::Result<bool> {
+        println!("🔐 Would you like to encrypt your features file? (Experimental)");
+        println!("   - Encrypted: Features are encrypted with your salt (more secure)");
+        println!("   - Plain: Features are stored as plain text (easier to view/backup)");
+        println!("   ⚠️  WARNING: Encrypted mode is experimental. If you forget your salt,");
+        println!("      your data cannot be recovered. Consider exporting regularly.");
+        println!();
+
+        let choices = vec!["Encrypted (Experimental)", "Plain Text (Recommended)"];
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Choose storage format")
+            .items(&choices)
+            .default(1) // Default to Plain Text for safety
+            .interact()
+            .map_err(io::Error::other)?;
+
+        Ok(selection == 0)
     }
 
     pub fn run(&mut self) -> io::Result<()> {
         println!("🔐 Welcome to SaltPass - Deterministic Password Generator");
         println!("📁 Storage: {}", self.storage.file_path().display());
+        println!("✅ Salt accepted (stored in memory only)");
         println!();
-
-        self.enter_salt()?;
 
         loop {
             let choices = vec![
@@ -42,6 +120,7 @@ impl Cli {
                 "Add New Feature",
                 "List All Features",
                 "Delete Feature",
+                "View Decrypted Content",
                 "Exit",
             ];
 
@@ -57,7 +136,8 @@ impl Cli {
                 1 => self.add_feature()?,
                 2 => self.list_features()?,
                 3 => self.delete_feature()?,
-                4 => {
+                4 => self.view_decrypted()?,
+                5 => {
                     println!("👋 Goodbye! Salt cleared from memory.");
                     break;
                 }
@@ -70,28 +150,7 @@ impl Cli {
         Ok(())
     }
 
-    fn enter_salt(&mut self) -> io::Result<()> {
-        print!("🔑 Enter your master salt (Tab: Show/Hide): ");
-        use std::io::Write;
-        io::stdout().flush()?;
-
-        let salt_input = self.read_password_with_asterisks()?;
-
-        if salt_input.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Salt cannot be empty",
-            ));
-        }
-
-        self.salt = Some(Salt::new(salt_input));
-        println!("✅ Salt accepted (stored in memory only)");
-        println!();
-
-        Ok(())
-    }
-
-    /// Read password with asterisk feedback
+    /// Read password with asterisk feedback (instance method)
     fn read_password_with_asterisks(&self) -> io::Result<String> {
         #[cfg(unix)]
         {
@@ -108,8 +167,19 @@ impl Cli {
 
                 let original_termios = termios;
                 termios.c_lflag &= !(libc::ECHO | libc::ICANON);
-                // Enable signal interrupt (ISIG) to allow Ctrl+C / Cmd+C to work
-                termios.c_lflag |= libc::ISIG;
+                // Also disable signals so we can handle all keys manually
+                termios.c_lflag &= !libc::ISIG;
+                // Set raw mode for proper key handling
+                termios.c_iflag &= !(libc::IGNBRK
+                    | libc::BRKINT
+                    | libc::PARMRK
+                    | libc::ISTRIP
+                    | libc::INLCR
+                    | libc::IGNCR
+                    | libc::ICRNL
+                    | libc::IXON);
+                termios.c_oflag &= !libc::OPOST;
+                termios.c_cflag |= libc::CS8;
 
                 if libc::tcsetattr(fd, libc::TCSANOW, &termios) != 0 {
                     return Err(io::Error::last_os_error());
@@ -168,7 +238,8 @@ impl Cli {
         use std::io::{self, Write};
 
         let mut password = String::new();
-        let mut visible = false; // Track visibility state
+        let mut visible = false;
+        let mut cursor_pos = 0; // Cursor position in bytes
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut handle = stdin.lock();
@@ -179,37 +250,153 @@ impl Cli {
             let c = buf[0] as char;
 
             match c {
-                '\t' => {
-                    // Tab key - toggle visibility
-                    visible = !visible;
-                    // Clear current display and show new state
-                    for _ in 0..password.len() {
-                        print!("\x08 \x08"); // Backspace, space, backspace
+                '\x1b' => {
+                    // Start of escape sequence - read next chars
+                    let mut seq_buf = [0u8; 3];
+                    handle.read_exact(&mut seq_buf[..2])?;
+                    // Check for arrow keys: ESC [ <letter>
+                    if seq_buf[0] == b'[' {
+                        match seq_buf[1] {
+                            b'D' => {
+                                // Left arrow
+                                if cursor_pos > 0 {
+                                    // Move back one character (not byte)
+                                    let prev_char_len = password[..cursor_pos]
+                                        .chars()
+                                        .last()
+                                        .map(|c| c.len_utf8())
+                                        .unwrap_or(1);
+                                    cursor_pos -= prev_char_len;
+                                    print!("\x08"); // Move cursor left
+                                    stdout.flush()?;
+                                }
+                            }
+                            b'C' => {
+                                // Right arrow
+                                if cursor_pos < password.len() {
+                                    // Move forward one character (not byte)
+                                    let next_char_len = password[cursor_pos..]
+                                        .chars()
+                                        .next()
+                                        .map(|c| c.len_utf8())
+                                        .unwrap_or(1);
+                                    cursor_pos += next_char_len;
+                                    print!("\x1b[C"); // Move cursor right
+                                    stdout.flush()?;
+                                }
+                            }
+                            b'3' => {
+                                // Delete key (ESC [ 3 ~) - read the tilde
+                                handle.read_exact(&mut seq_buf[2..3])?;
+                                if seq_buf[2] == b'~' && cursor_pos < password.len() {
+                                    // Remove character at cursor position
+                                    password.remove(cursor_pos);
+                                    // Redraw entire line from cursor position
+                                    let rest: String = password[cursor_pos..].chars().collect();
+                                    for _ in 0..=rest.len() {
+                                        print!(" ");
+                                    }
+                                    for _ in 0..=rest.len() {
+                                        print!("\x08");
+                                    }
+                                    // Redraw remaining characters
+                                    if visible {
+                                        print!("{}", rest);
+                                    } else {
+                                        for _ in 0..rest.chars().count() {
+                                            print!("*");
+                                        }
+                                    }
+                                    // Move cursor back to correct position
+                                    for _ in 0..rest.chars().count() {
+                                        print!("\x08");
+                                    }
+                                    stdout.flush()?;
+                                }
+                            }
+                            b'A' | b'B' => {
+                                // Up/Down arrows - ignore
+                            }
+                            _ => {}
+                        }
                     }
-                    // Redisplay in new mode
+                }
+                '\t' => {
+                    visible = !visible;
+                    // Clear current display
+                    let char_count = password.chars().count();
+                    for _ in 0..char_count {
+                        print!("\x08 \x08");
+                    }
+                    // Redraw in new mode
                     if visible {
                         print!("{}", password);
                     } else {
-                        for _ in 0..password.len() {
+                        for _ in 0..char_count {
                             print!("*");
+                        }
+                    }
+                    // Restore cursor position
+                    let display_char_count = password.chars().count();
+                    let cursor_char_pos = password[..cursor_pos].chars().count();
+                    if cursor_char_pos < display_char_count {
+                        for _ in cursor_char_pos..display_char_count {
+                            print!("\x08");
                         }
                     }
                     stdout.flush()?;
                 }
                 '\n' | '\r' => {
-                    println!();
+                    // In raw mode with OPOST disabled, we need explicit CRLF
+                    print!("\r\n");
+                    stdout.flush()?;
                     break;
                 }
                 '\x08' | '\x7f' => {
-                    // Backspace/Delete
-                    if !password.is_empty() {
-                        password.pop();
-                        print!("\x08 \x08"); // Backspace, space, backspace
+                    // Backspace - delete character to the left of cursor
+                    if cursor_pos > 0 {
+                        // Find the character before cursor and get its byte length
+                        let prev_char_len = password[..cursor_pos]
+                            .chars()
+                            .last()
+                            .map(|c| c.len_utf8())
+                            .unwrap_or(1);
+                        // Move cursor back
+                        let new_cursor_pos = cursor_pos - prev_char_len;
+                        // Remove the character before cursor (at new_cursor_pos)
+                        password.remove(new_cursor_pos);
+                        // Update cursor position
+                        cursor_pos = new_cursor_pos;
+                        // Move visual cursor back one position
+                        print!("\x08");
+                        // Clear from new cursor position to end
+                        let rest: String = password[cursor_pos..].chars().collect();
+                        let rest_count = rest.chars().count();
+                        // Print spaces to clear (1 for deleted char + rest)
+                        for _ in 0..=rest_count {
+                            print!(" ");
+                        }
+                        // Move cursor back to the start of cleared area
+                        for _ in 0..=rest_count {
+                            print!("\x08");
+                        }
+                        // Redraw remaining characters
+                        if visible {
+                            print!("{}", rest);
+                        } else {
+                            for _ in 0..rest_count {
+                                print!("*");
+                            }
+                        }
+                        // Move cursor back to correct position (at end of redrawn text)
+                        for _ in 0..rest_count {
+                            print!("\x08");
+                        }
                         stdout.flush()?;
                     }
                 }
-                '\x03' => {
-                    // Ctrl+C
+                '\x03' | '\x1c' => {
+                    // Ctrl+C (0x03) or Ctrl+\ (0x1c)
                     println!();
                     return Err(io::Error::new(
                         io::ErrorKind::Interrupted,
@@ -217,17 +404,31 @@ impl Cli {
                     ));
                 }
                 c if c.is_ascii_graphic() => {
-                    password.push(c);
+                    // Insert character at cursor position
+                    password.insert(cursor_pos, c);
+                    cursor_pos += c.len_utf8();
+                    // Display the new character
                     if visible {
                         print!("{}", c);
                     } else {
                         print!("*");
                     }
+                    // Redraw the rest of the line
+                    let rest: String = password[cursor_pos..].chars().collect();
+                    if visible {
+                        print!("{}", rest);
+                    } else {
+                        for _ in 0..rest.chars().count() {
+                            print!("*");
+                        }
+                    }
+                    // Move cursor back to correct position
+                    for _ in 0..rest.chars().count() {
+                        print!("\x08");
+                    }
                     stdout.flush()?;
                 }
-                _ => {
-                    // Ignore other control characters
-                }
+                _ => {}
             }
         }
 
@@ -401,6 +602,30 @@ impl Cli {
         self.storage.save(&self.store)?;
 
         println!("🗑️  Feature '{}' deleted successfully!", feature_name);
+
+        Ok(())
+    }
+
+    fn view_decrypted(&self) -> io::Result<()> {
+        if !self.storage.file_path().exists() {
+            println!("📭 No storage file found yet.");
+            return Ok(());
+        }
+
+        match self.storage.export_decrypted() {
+            Ok(content) => {
+                println!("\n📄 Decrypted Content (TOML):");
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                println!("{}", content);
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            }
+            Err(e) => {
+                println!("❌ Failed to decrypt: {}", e);
+                println!(
+                    "💡 Note: If using encrypted storage, the encryption password must match."
+                );
+            }
+        }
 
         Ok(())
     }

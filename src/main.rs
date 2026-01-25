@@ -26,21 +26,18 @@ mod storage;
 
 use cli::Cli;
 use std::process;
-use storage::StorageFormat;
 
 fn main() {
-    let format = StorageFormat::Toml;
-
-    let mut app = match Cli::new(format) {
+    let mut app = match Cli::new() {
         Ok(app) => app,
         Err(e) => {
-            eprintln!("❌ Error initializing application: {}", e);
+            eprintln!("\r\x1b[2K❌ Error: {}", e);
             process::exit(1);
         }
     };
 
     if let Err(e) = app.run() {
-        eprintln!("❌ Error: {}", e);
+        eprintln!("\r\x1b[2K❌ Error: {}", e); // \x1b[2K clears the line
         process::exit(1);
     }
 }
