@@ -167,23 +167,6 @@ Output: Strong Password
 
 ## 🛠️ Technical Details
 
-### Dependencies
-
-- **serde**: Serialization/deserialization
-- **serde_json**: JSON support (optional)
-- **toml**: TOML storage format (default)
-- **sha2**: SHA-256 hashing
-- **hmac**: HMAC implementation
-- **argon2**: Argon2i/Argon2id password hashing
-- **pbkdf2**: PBKDF2-HMAC-SHA256
-- **scrypt**: Scrypt password hashing
-- **base64**: Base64 encoding
-- **dialoguer**: Interactive CLI
-- **arboard**: Clipboard integration
-- **zeroize**: Secure memory zeroing
-- **chrono**: Timestamp handling
-- **dirs**: Platform-specific directories
-
 ### Storage Location
 
 - **macOS/Linux**: `~/.saltpass/features.toml`

@@ -165,23 +165,6 @@ enum Algorithm {
 
 ## 🛠️ 技术细节
 
-### 依赖项
-
-- **serde**：序列化/反序列化
-- **serde_json**：JSON 支持（可选）
-- **toml**：TOML 存储格式（默认）
-- **sha2**：SHA-256 哈希
-- **hmac**：HMAC 实现
-- **argon2**：Argon2i/Argon2id 密码哈希
-- **pbkdf2**：PBKDF2-HMAC-SHA256
-- **scrypt**：Scrypt 密码哈希
-- **base64**：Base64 编码
-- **dialoguer**：交互式 CLI
-- **arboard**：剪贴板集成
-- **zeroize**：安全内存清零
-- **chrono**：时间戳处理
-- **dirs**：平台特定目录
-
 ### 存储位置
 
 - **macOS/Linux**：`~/.saltpass/features.toml`
