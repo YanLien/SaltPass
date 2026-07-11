@@ -178,8 +178,8 @@ Output: Strong Password
 
 **Encrypted Storage** (`*.enc` files):
 - Features encrypted with AES-256-GCM
-- Uses your master salt as the encryption key
-- Same password = same decryption key
+- Derives the encryption key with PBKDF2 and a random per-file salt
+- A random per-file salt produces a distinct encryption key on every save
 - Provides at-rest encryption for feature data
 
 **Plain Text Storage** (recommended):

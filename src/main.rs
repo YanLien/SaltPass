@@ -21,12 +21,14 @@
 
 mod cli;
 mod crypto;
+mod error;
 mod models;
 mod storage;
 
 use cli::Cli;
 use std::process;
 
+/// Initializes SaltPass, runs the interactive session, and reports fatal errors.
 fn main() {
     let mut app = match Cli::new() {
         Ok(app) => app,

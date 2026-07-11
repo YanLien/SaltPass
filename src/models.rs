@@ -15,15 +15,16 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// The salt is never written to disk and exists only in memory during the application's lifetime.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Salt {
-    #[zeroize(skip)]
     salt_value: String,
 }
 
 impl Salt {
+    /// Wraps a master secret so it is zeroed when dropped.
     pub fn new(value: String) -> Self {
         Self { salt_value: value }
     }
 
+    /// Borrows the master secret without creating another copy.
     pub fn value(&self) -> &str {
         &self.salt_value
     }
@@ -44,6 +45,7 @@ pub struct Feature {
 }
 
 impl Feature {
+    /// Creates a feature record with the current UTC timestamp.
     pub fn new(name: String, feature: String, algorithm: Algorithm, hint: Option<String>) -> Self {
         Self {
             name,
@@ -64,16 +66,19 @@ pub struct FeatureStore {
 }
 
 impl FeatureStore {
+    /// Creates an empty feature collection.
     pub fn new() -> Self {
         Self {
             features: Vec::new(),
         }
     }
 
+    /// Appends a feature to the collection.
     pub fn add_feature(&mut self, feature: Feature) {
         self.features.push(feature);
     }
 
+    /// Removes and returns the feature at `index`, if it exists.
     pub fn remove_feature(&mut self, index: usize) -> Option<Feature> {
         if index < self.features.len() {
             Some(self.features.remove(index))
@@ -82,12 +87,14 @@ impl FeatureStore {
         }
     }
 
+    /// Returns all features as a read-only slice.
     pub fn list_features(&self) -> &[Feature] {
         &self.features
     }
 }
 
 impl Default for FeatureStore {
+    /// Creates the default empty feature collection.
     fn default() -> Self {
         Self::new()
     }

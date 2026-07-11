@@ -3,13 +3,15 @@
 //! This module provides deterministic password generation using multiple algorithms.
 //! Given the same salt and feature identifier, it will always produce the same password.
 
+use crate::error::{CryptoError, CryptoResult};
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, AeadCore, KeyInit, OsRng},
+    aead::{Aead, AeadCore, KeyInit, OsRng, rand_core::RngCore},
 };
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -30,6 +32,7 @@ pub enum Algorithm {
 }
 
 impl Algorithm {
+    /// Returns the human-readable algorithm name shown by the CLI.
     pub fn name(&self) -> &str {
         match self {
             Algorithm::HmacSha256 => "HMAC-SHA256",
@@ -40,6 +43,7 @@ impl Algorithm {
         }
     }
 
+    /// Returns every algorithm in the order used by selection menus.
     pub fn all() -> &'static [Algorithm] {
         &[
             Algorithm::HmacSha256,
@@ -72,135 +76,124 @@ impl PasswordGenerator {
     /// ```
     /// use SaltPass::crypto::{PasswordGenerator, Algorithm};
     ///
-    /// let password = PasswordGenerator::generate_with_algo("my-secret-salt", "github.com", 16, Algorithm::HmacSha256);
+    /// let password = PasswordGenerator::generate_with_algo("my-secret-salt", "github.com", 16, Algorithm::HmacSha256).unwrap();
     /// assert_eq!(password.len(), 16);
     /// ```
     #[allow(dead_code)]
-    pub fn generate(salt: &str, feature: &str, length: usize) -> String {
+    pub fn generate(salt: &str, feature: &str, length: usize) -> CryptoResult<String> {
         Self::generate_with_algo(salt, feature, length, Algorithm::HmacSha256)
     }
 
     /// Generate a password using a specific algorithm
-    pub fn generate_with_algo(salt: &str, feature: &str, length: usize, algo: Algorithm) -> String {
-        let bytes = match algo {
+    pub fn generate_with_algo(
+        salt: &str,
+        feature: &str,
+        length: usize,
+        algo: Algorithm,
+    ) -> CryptoResult<String> {
+        let mut root = match algo {
             Algorithm::HmacSha256 => Self::derive_hmac_sha256(salt, feature),
-            Algorithm::Argon2i => Self::derive_argon2(salt, feature, argon2::Algorithm::Argon2i),
-            Algorithm::Argon2id => Self::derive_argon2(salt, feature, argon2::Algorithm::Argon2id),
+            Algorithm::Argon2i => Self::derive_argon2(salt, feature, argon2::Algorithm::Argon2i)?,
+            Algorithm::Argon2id => Self::derive_argon2(salt, feature, argon2::Algorithm::Argon2id)?,
             Algorithm::Pbkdf2 => Self::derive_pbkdf2(salt, feature),
-            Algorithm::Scrypt => Self::derive_scrypt(salt, feature),
+            Algorithm::Scrypt => Self::derive_scrypt(salt, feature)?,
         };
-
-        let base64_encoded =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-
-        Self::format_password(&base64_encoded, length)
+        let password = Self::format_password(&root, feature, length);
+        root.zeroize();
+        Ok(password)
     }
 
+    /// Hashes a feature into a fixed-length, domain-separated KDF salt.
+    fn feature_salt(feature: &str) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(b"SaltPass/password/v2/feature\0");
+        hash.update(feature.as_bytes());
+        hash.finalize().into()
+    }
+
+    /// Derives a password root with the selected Argon2 variant.
+    fn derive_argon2(salt: &str, feature: &str, alg: argon2::Algorithm) -> CryptoResult<[u8; 32]> {
+        use argon2::{Argon2, Params, Version};
+        let params = Params::new(65536, 2, 2, Some(32))
+            .map_err(|e| CryptoError::KeyDerivation(e.to_string()))?;
+        let argon2 = Argon2::new(alg, Version::V0x13, params);
+        let mut output = [0u8; 32];
+        argon2
+            .hash_password_into(salt.as_bytes(), &Self::feature_salt(feature), &mut output)
+            .map_err(|e| CryptoError::KeyDerivation(e.to_string()))?;
+        Ok(output)
+    }
+
+    /// Derives a password root with PBKDF2-HMAC-SHA256.
+    fn derive_pbkdf2(salt: &str, feature: &str) -> [u8; 32] {
+        let mut output = [0u8; 32];
+        pbkdf2::pbkdf2_hmac::<Sha256>(
+            salt.as_bytes(),
+            &Self::feature_salt(feature),
+            100_000,
+            &mut output,
+        );
+        output
+    }
+
+    /// Derives a password root with scrypt.
+    fn derive_scrypt(salt: &str, feature: &str) -> CryptoResult<[u8; 32]> {
+        let params = scrypt::Params::new(15, 8, 1, 32)
+            .map_err(|e| CryptoError::KeyDerivation(e.to_string()))?;
+        let mut output = [0u8; 32];
+        scrypt::scrypt(
+            salt.as_bytes(),
+            &Self::feature_salt(feature),
+            &params,
+            &mut output,
+        )
+        .map_err(|e| CryptoError::KeyDerivation(e.to_string()))?;
+        Ok(output)
+    }
+
+    /// Expands a root key into a deterministic password satisfying all character classes.
+    fn format_password(root: &[u8; 32], feature: &str, length: usize) -> String {
+        const LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
+        const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const DIGIT: &[u8] = b"0123456789";
+        const SPECIAL: &[u8] = b"!@#$%^&*";
+        const ALL: &[u8] =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+        let length = length.clamp(12, 64);
+        let mut stream = Vec::with_capacity(length * 2);
+        let mut counter = 0u32;
+        while stream.len() < length * 2 {
+            let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(root).expect("valid HMAC key");
+            mac.update(b"SaltPass/password/v2/output\0");
+            mac.update(feature.as_bytes());
+            mac.update(&(length as u64).to_be_bytes());
+            mac.update(&counter.to_be_bytes());
+            stream.extend_from_slice(&mac.finalize().into_bytes());
+            counter += 1;
+        }
+        let mut password = vec![
+            LOWER[stream[0] as usize % LOWER.len()],
+            UPPER[stream[1] as usize % UPPER.len()],
+            DIGIT[stream[2] as usize % DIGIT.len()],
+            SPECIAL[stream[3] as usize % SPECIAL.len()],
+        ];
+        for byte in &stream[4..length] {
+            password.push(ALL[*byte as usize % ALL.len()]);
+        }
+        for i in (1..password.len()).rev() {
+            let j = stream[length + i] as usize % (i + 1);
+            password.swap(i, j);
+        }
+        String::from_utf8(password).expect("password alphabet is ASCII")
+    }
+
+    /// Derives a password root by authenticating the feature with the master secret.
     fn derive_hmac_sha256(salt: &str, feature: &str) -> [u8; 32] {
         let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(salt.as_bytes())
             .expect("HMAC can take key of any size");
         mac.update(feature.as_bytes());
         let result = mac.finalize();
         *result.into_bytes().as_ref()
-    }
-
-    fn derive_argon2(salt: &str, feature: &str, alg: argon2::Algorithm) -> [u8; 32] {
-        use argon2::{Argon2, Params, Version};
-        let params = Params::new(65536, 2, 2, None).unwrap();
-        let argon2 = Argon2::new(alg, Version::V0x13, params);
-        let mut output = [0u8; 32];
-        argon2
-            .hash_password_into(feature.as_bytes(), salt.as_bytes(), &mut output)
-            .unwrap();
-        output
-    }
-
-    fn derive_pbkdf2(salt: &str, feature: &str) -> [u8; 32] {
-        use pbkdf2::pbkdf2_hmac;
-        use sha2::Sha256;
-
-        let mut output = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(feature.as_bytes(), salt.as_bytes(), 10000, &mut output);
-        output
-    }
-
-    fn derive_scrypt(salt: &str, feature: &str) -> [u8; 32] {
-        use scrypt::{Params, scrypt};
-
-        // Params::new(log_n, r, p, output_length)
-        let params = Params::new(15, 8, 1, 32).unwrap();
-        let mut output = [0u8; 32];
-        scrypt(feature.as_bytes(), salt.as_bytes(), &params, &mut output).expect("scrypt failed");
-        output
-    }
-
-    fn format_password(raw: &str, length: usize) -> String {
-        let length = length.clamp(12, 64);
-
-        let mut password = String::new();
-        let chars: Vec<char> = raw.chars().collect();
-
-        let mut idx = 0;
-        let mut has_upper = false;
-        let mut has_digit = false;
-        let mut has_special = false;
-
-        for ch in chars.iter() {
-            if password.len() >= length {
-                break;
-            }
-
-            let processed = match ch {
-                'A'..='Z' => {
-                    has_upper = true;
-                    Some(*ch)
-                }
-                'a'..='z' => Some(*ch),
-                '0'..='9' => {
-                    has_digit = true;
-                    Some(*ch)
-                }
-                '+' | '/' | '=' => {
-                    has_special = true;
-                    Some(Self::map_special(*ch, idx))
-                }
-                _ => None,
-            };
-
-            if let Some(c) = processed {
-                password.push(c);
-                idx += 1;
-            }
-        }
-
-        if !has_upper
-            && !password.is_empty()
-            && let Some(first) = password.chars().next()
-        {
-            password = format!("{}{}", first.to_uppercase(), &password[1..]);
-        }
-
-        if !has_digit && password.len() > 1 {
-            let digit = (idx % 10).to_string();
-            password.replace_range(1..2, &digit);
-        }
-
-        if !has_special && password.len() > 2 {
-            password.replace_range(2..3, "!");
-        }
-
-        password.truncate(length);
-        password
-    }
-
-    fn map_special(ch: char, idx: usize) -> char {
-        let specials = ['!', '@', '#', '$', '%', '^', '&', '*'];
-        match ch {
-            '+' => specials[idx % specials.len()],
-            '/' => specials[(idx + 1) % specials.len()],
-            '=' => specials[(idx + 2) % specials.len()],
-            _ => '!',
-        }
     }
 }
 
@@ -210,16 +203,17 @@ impl PasswordGenerator {
 pub struct StorageCipher;
 
 impl StorageCipher {
+    const PREFIX: &str = "SP:";
+    const SALT_SIZE: usize = 16;
     const NONCE_SIZE: usize = 12;
     const KEY_SIZE: usize = 32;
 
-    /// Derive a 256-bit encryption key from a password using PBKDF2
-    fn derive_key(password: &str) -> [u8; Self::KEY_SIZE] {
+    /// Derives a 256-bit storage key from a password and per-file salt.
+    fn derive_key(password: &str, salt: &[u8]) -> [u8; Self::KEY_SIZE] {
         use pbkdf2::pbkdf2_hmac;
 
-        let salt = b"SaltPass-Storage-Key"; // Fixed salt for key derivation
         let mut key = [0u8; Self::KEY_SIZE];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut key);
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 200_000, &mut key);
         key
     }
 
@@ -233,20 +227,27 @@ impl StorageCipher {
     /// # Returns
     ///
     /// Base64-encoded ciphertext with nonce prepended (nonce || ciphertext || tag)
-    pub fn encrypt(password: &str, plaintext: &[u8]) -> Result<String, String> {
-        let key = Self::derive_key(password);
+    pub fn encrypt(password: &str, plaintext: &[u8]) -> CryptoResult<String> {
+        let mut salt = [0u8; Self::SALT_SIZE];
+        OsRng.fill_bytes(&mut salt);
+        let mut key = Self::derive_key(password, &salt);
         let cipher = Aes256Gcm::new(&key.into());
+        key.zeroize();
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
         cipher
             .encrypt(&nonce, plaintext)
             .map(|ciphertext| {
-                // Format: nonce || ciphertext (includes auth tag)
-                let mut result = nonce.to_vec();
+                let mut result = salt.to_vec();
+                result.extend_from_slice(&nonce);
                 result.extend_from_slice(&ciphertext);
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, result)
+                format!(
+                    "{}{}",
+                    Self::PREFIX,
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, result)
+                )
             })
-            .map_err(|e| format!("Encryption failed: {}", e))
+            .map_err(|_| CryptoError::Encryption)
     }
 
     /// Decrypt data using AES-256-GCM
@@ -259,23 +260,27 @@ impl StorageCipher {
     /// # Returns
     ///
     /// Decrypted plaintext
-    pub fn decrypt(password: &str, encoded: &str) -> Result<Vec<u8>, String> {
-        let key = Self::derive_key(password);
-        let cipher = Aes256Gcm::new(&key.into());
+    pub fn decrypt(password: &str, encoded: &str) -> CryptoResult<Vec<u8>> {
+        let payload = encoded
+            .strip_prefix(Self::PREFIX)
+            .ok_or(CryptoError::InvalidCiphertext("unsupported storage format"))?;
+        let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, payload)
+            .map_err(|e| CryptoError::InvalidEncoding(e.to_string()))?;
 
-        let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-            .map_err(|e| format!("Base64 decode failed: {}", e))?;
-
-        if data.len() < Self::NONCE_SIZE {
-            return Err("Invalid ciphertext: too short".to_string());
+        if data.len() < Self::SALT_SIZE + Self::NONCE_SIZE + 16 {
+            return Err(CryptoError::InvalidCiphertext("payload is too short"));
         }
 
-        let (nonce_bytes, ciphertext) = data.split_at(Self::NONCE_SIZE);
+        let (salt, encrypted) = data.split_at(Self::SALT_SIZE);
+        let mut key = Self::derive_key(password, salt);
+        let cipher = Aes256Gcm::new(&key.into());
+        key.zeroize();
+        let (nonce_bytes, ciphertext) = encrypted.split_at(Self::NONCE_SIZE);
         let nonce = Nonce::from_slice(nonce_bytes);
 
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))
+            .map_err(|_| CryptoError::Decryption)
     }
 }
 
@@ -288,8 +293,8 @@ mod tests {
         let salt = "my-secret-salt";
         let feature = "github.com";
 
-        let pwd1 = PasswordGenerator::generate(salt, feature, 16);
-        let pwd2 = PasswordGenerator::generate(salt, feature, 16);
+        let pwd1 = PasswordGenerator::generate(salt, feature, 16).unwrap();
+        let pwd2 = PasswordGenerator::generate(salt, feature, 16).unwrap();
 
         assert_eq!(pwd1, pwd2, "Same inputs should produce same password");
     }
@@ -298,8 +303,8 @@ mod tests {
     fn test_different_features() {
         let salt = "my-secret-salt";
 
-        let pwd1 = PasswordGenerator::generate(salt, "github.com", 16);
-        let pwd2 = PasswordGenerator::generate(salt, "google.com", 16);
+        let pwd1 = PasswordGenerator::generate(salt, "github.com", 16).unwrap();
+        let pwd2 = PasswordGenerator::generate(salt, "google.com", 16).unwrap();
 
         assert_ne!(
             pwd1, pwd2,
@@ -311,12 +316,49 @@ mod tests {
     fn test_different_salts() {
         let feature = "github.com";
 
-        let pwd1 = PasswordGenerator::generate("salt1", feature, 16);
-        let pwd2 = PasswordGenerator::generate("salt2", feature, 16);
+        let pwd1 = PasswordGenerator::generate("salt1", feature, 16).unwrap();
+        let pwd2 = PasswordGenerator::generate("salt2", feature, 16).unwrap();
 
         assert_ne!(
             pwd1, pwd2,
             "Different salts should produce different passwords"
+        );
+    }
+
+    #[test]
+    fn supports_every_documented_length_and_character_class() {
+        for length in 12..=64 {
+            let password = PasswordGenerator::generate_with_algo(
+                "correct horse battery staple",
+                "example.com",
+                length,
+                Algorithm::HmacSha256,
+            )
+            .unwrap();
+            assert_eq!(password.len(), length);
+            assert!(password.chars().any(|c| c.is_ascii_lowercase()));
+            assert!(password.chars().any(|c| c.is_ascii_uppercase()));
+            assert!(password.chars().any(|c| c.is_ascii_digit()));
+            assert!(password.chars().any(|c| "!@#$%^&*".contains(c)));
+        }
+    }
+
+    #[test]
+    fn encrypted_storage_round_trip_and_authentication() {
+        let encrypted = StorageCipher::encrypt("master secret", b"sensitive features").unwrap();
+        assert!(encrypted.starts_with(StorageCipher::PREFIX));
+        assert_eq!(
+            StorageCipher::decrypt("master secret", &encrypted).unwrap(),
+            b"sensitive features"
+        );
+        assert!(StorageCipher::decrypt("wrong secret", &encrypted).is_err());
+
+        let mut tampered = encrypted.into_bytes();
+        let last = tampered.len() - 1;
+        tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
+        assert!(
+            StorageCipher::decrypt("master secret", std::str::from_utf8(&tampered).unwrap())
+                .is_err()
         );
     }
 }
